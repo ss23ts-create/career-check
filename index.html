@@ -13,9 +13,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, collection, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // ==========================================
-        // 1. あなた専用のFirebase設定
-        // ==========================================
+        // あなたのFirebase設定
         const firebaseConfig = {
             apiKey: "AIzaSyB7gmoM4rVGRK2BE5TBDNAht-OrCO6PSss",
             authDomain: "career-check-app.firebaseapp.com",
@@ -26,49 +24,29 @@
             measurementId: "G-0HW8JVMTEE"
         };
 
-        const appId = 'career-check-2025-final-v1';
-        const BASE_COUNT = 5241; // 初期表示用の賑わい数値
+        const appId = 'career-check-2025-v13'; 
+        const BASE_COUNT = 6421; 
 
         const state = {
-            user: null,
-            gender: '',
-            age: 0,
-            job: '',
-            salary: 0,
-            mgmt: 0,
-            resultVal: 0,
-            communityAvg: 615,
-            communityCount: BASE_COUNT
+            user: null, gender: '', age: 0, exp: 0, job: '', salary: 0, mgmt: 0, resultVal: 0, communityAvg: 610, communityCount: BASE_COUNT
         };
 
         let charts = { gap: null, radar: null };
 
-        // Firebase初期化
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // 匿名認証（これを行わないとFirestoreの読み書きができません）
-        const initAuth = async () => {
-            try {
-                await signInAnonymously(auth);
-            } catch (e) {
-                console.error("Auth Error:", e);
-            }
-        };
+        signInAnonymously(auth).catch(e => console.error("Auth Error:", e));
 
         onAuthStateChanged(auth, (user) => {
             state.user = user;
-            if (user) {
-                syncDatabase();
-            }
+            if (user) syncDatabase();
         });
 
-        // リアルタイム診断数集計
         function syncDatabase() {
             if (!auth.currentUser) return;
             const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'history');
-            
             onSnapshot(colRef, (snap) => {
                 let total = 0, count = 0;
                 snap.forEach(doc => {
@@ -76,48 +54,54 @@
                     if (typeof val === 'number') { total += val; count++; }
                 });
                 state.communityCount = count + BASE_COUNT;
-                state.communityAvg = count > 0 ? Math.round(total / count) : 615;
-                
+                state.communityAvg = count > 0 ? Math.round(total / count) : 610;
                 const el = document.getElementById('stat-count');
                 if (el) el.innerText = state.communityCount.toLocaleString();
-            }, (err) => {
-                console.error("Firestore Error:", err);
             });
         }
 
-        // 診断ロジック
         async function runDiagnostic(e) {
             e.preventDefault();
-            if (!auth.currentUser) {
-                alert("データの接続を待機中です。数秒後に再度お試しください。");
-                return;
-            }
+            if (!auth.currentUser) return;
 
             state.gender = document.querySelector('input[name="gender"]:checked').value;
             state.age = parseInt(document.getElementById('age').value);
+            state.exp = parseFloat(document.getElementById('exp').value);
             state.job = document.getElementById('job').value;
             state.salary = parseInt(document.getElementById('salary').value);
             state.mgmt = parseInt(document.querySelector('input[name="mgmt"]:checked').value);
 
             showScreen('screen-loading');
 
-            // 2025年計算モデル
-            const medians = { 23: 380, 27: 490, 32: 590, 37: 740, 45: 870 };
-            let base = medians[state.age] || 520;
-            const multipliers = { sales: 1.15, engineer: 1.48, creative: 1.25, admin: 1.0, other: 1.05 };
+            /* --- 精密計算ロジック 2025現実版 --- */
+            // 1. 年齢別ベース（日本の民間給与実態統計調査ベース）
+            const medians = { 23: 340, 27: 430, 32: 520, 37: 620, 45: 750 };
+            let base = medians[state.age] || 500;
+            
+            // 2. 職種倍率（2025年市場需要・現実的なレンジに圧縮）
+            const multipliers = { sales: 1.05, engineer: 1.25, creative: 1.1, admin: 0.9, other: 1.0 };
             let factor = multipliers[state.job] || 1.0;
-            if (state.mgmt === 1) factor += 0.28;
-            if (state.gender === 'female' && state.mgmt === 1) factor += 0.08;
+            
+            // 3. 経験年数による習熟度係数（0.9〜1.2倍に調整）
+            // exp値: 0.9(1年未満), 1.0(1-3年), 1.08(3-5年), 1.15(5-10年), 1.22(10年以上)
+            const expBonusMap = { "0.85": 0.9, "1.0": 1.0, "1.15": 1.08, "1.25": 1.15, "1.35": 1.22 };
+            const expBonus = expBonusMap[state.exp.toString()] || 1.0;
+            factor *= expBonus;
 
-            state.resultVal = Math.round((base * factor * (0.97 + Math.random() * 0.06)) / 10) * 10;
+            // 4. 管理職ボーナス（責任相応の+15%程度）
+            if (state.mgmt === 1) factor *= 1.15; 
 
-            // Firestoreに結果を保存
+            // 5. 最終算出（ノイズを減らし現実に着地）
+            state.resultVal = Math.round((base * factor * (0.97 + Math.random() * 0.05)) / 10) * 10;
+
             try {
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'history'), {
                     marketValue: state.resultVal,
                     gender: state.gender,
-                    job: state.job,
                     age: state.age,
+                    exp: state.exp,
+                    job: state.job,
+                    salary: state.salary,
                     createdAt: serverTimestamp()
                 });
             } catch (e) { console.error("Save Error:", e); }
@@ -125,7 +109,7 @@
             setTimeout(() => {
                 displayResults();
                 showScreen('screen-result');
-            }, 1800);
+            }, 2000);
         }
 
         function displayResults() {
@@ -134,18 +118,18 @@
             const badge = document.getElementById('res-badge');
             const adviceEl = document.getElementById('res-advice');
             
-            if (diff > 120) {
-                badge.innerText = "🚨 深刻な過小評価状態";
-                badge.className = "px-4 py-1.5 rounded-full bg-red-600 text-white text-[10px] font-black animate-pulse";
-                adviceEl.innerHTML = `<span class="text-orange-600 font-bold">【2025年 専門家診断】</span><br>現在の報酬はあなたの実力を反映していません。今のスキルセットなら${diff}万円以上のアップが十分に狙えます。`;
-            } else if (diff > 0) {
+            if (diff > 80) {
                 badge.innerText = "📈 市場価値が先行しています";
                 badge.className = "px-4 py-1.5 rounded-full bg-orange-500 text-white text-[10px] font-black";
-                adviceEl.innerHTML = `<span class="text-orange-600 font-bold">【2025年 専門家分析】</span><br>実力に対して報酬が控えめです。特に「${state.job === 'engineer' ? 'IT需要' : '今の専門性'}」が2025年の転職市場で高く評価されています。`;
+                adviceEl.innerHTML = `<span class="text-orange-600 font-bold">【2025年 専門家分析】</span><br>現在の市場では、あなたの経験値に対して${diff}万円前後の上積みが狙える求人が多く存在します。特に「${state.job === 'engineer' ? 'エンジニア需要' : '実務専門性'}」が評価される時期です。`;
+            } else if (diff < -50) {
+                badge.innerText = "🌟 現職での評価が高水準";
+                badge.className = "px-4 py-1.5 rounded-full bg-green-500 text-white text-[10px] font-black";
+                adviceEl.innerHTML = `<span class="text-green-600 font-bold">【2025年 専門家分析】</span><br>会社から非常に高く評価されている安定した状態です。今は無理に転職を検討するより、現職での昇進や権限拡大を狙う方が長期的なメリットが大きいです。`;
             } else {
                 badge.innerText = "✅ 理想的な評価バランス";
                 badge.className = "px-4 py-1.5 rounded-full bg-blue-600 text-white text-[10px] font-black";
-                adviceEl.innerHTML = `<span class="text-blue-600 font-bold">【2025年 専門家分析】</span><br>能力と報酬のバランスが良好です。突き抜けるには、専門領域の拡張や「AI活用スキル」の習得が鍵となります。`;
+                adviceEl.innerHTML = `<span class="text-blue-600 font-bold">【2025年 専門家分析】</span><br>能力と報酬のバランスが非常に良好です。ここから年収を一段階引き上げるには、既存スキルの深化に加え「AI活用」などの生産性向上の武器を持つことが推奨されます。`;
             }
             renderCharts();
         }
@@ -153,11 +137,10 @@
         function renderCharts() {
             if (charts.gap) charts.gap.destroy();
             if (charts.radar) charts.radar.destroy();
-            
             charts.gap = new Chart(document.getElementById('chartGap').getContext('2d'), {
                 type: 'bar',
                 data: {
-                    labels: [['あなたの', '現在年収'], ['あなたの', '適正年収'], ['全ユーザー', '平均']],
+                    labels: [['あなたの', '現在年収'], ['あなたの', '適正年収'], ['全体', '平均']],
                     datasets: [{
                         data: [state.salary, state.resultVal, state.communityAvg],
                         backgroundColor: ['#E2E8F0', '#2563EB', '#94A3B8'],
@@ -166,13 +149,12 @@
                 },
                 options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { display: false }, x: { grid: { display: false } } } }
             });
-            
             charts.radar = new Chart(document.getElementById('chartRadar').getContext('2d'), {
                 type: 'radar',
                 data: {
-                    labels: [['専門', 'スキル'], ['組織', '管理能力'], ['AI', '活用力'], ['市場', '需要度'], ['キャリア', '期待値']],
+                    labels: [['専門', 'スキル'], ['組織', '管理能力'], ['AI', '活用力'], ['市場', '需要度'], ['経験', '評価']],
                     datasets: [{
-                        data: [state.job === 'engineer' ? 95 : 82, state.mgmt ? 92 : 45, 78, 90, 85],
+                        data: [state.job === 'engineer' ? 90 : 80, state.mgmt ? 88 : 45, 75, 85, 70],
                         backgroundColor: 'rgba(37, 99, 235, 0.1)', borderColor: '#2563EB', borderWidth: 2, pointRadius: 0
                     }]
                 },
@@ -191,7 +173,6 @@
             const text = `私の本当の市場価値は ${state.resultVal}万円でした！ 2025年最新版の適正年収をチェック 🚀 #市場価値診断`;
             window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank');
         };
-        initAuth();
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Noto+Sans+JP:wght@400;700;900&display=swap');
@@ -219,7 +200,7 @@
         <div class="w-full space-y-6">
             <button onclick="showScreen('screen-form')" class="w-full bg-blue-600 text-white font-black py-5 rounded-[2.5rem] text-xl shadow-2xl shadow-blue-600/30 active:scale-95 transition-all">診断を開始（無料）</button>
             <div class="p-6 bg-slate-50 rounded-[2.5rem] border border-slate-100 space-y-2">
-                <p class="text-[11px] text-slate-400 font-black uppercase tracking-widest">Global Statistics Sync</p>
+                <p class="text-[11px] text-slate-400 font-black uppercase tracking-widest">Diagnostic Statistics</p>
                 <p class="text-4xl font-black text-slate-800"><span id="stat-count">----</span><span class="text-sm ml-1 opacity-40">件</span></p>
                 <div class="flex items-center justify-center -space-x-2 pt-2">
                     <div class="w-8 h-8 rounded-full bg-slate-300 border-2 border-white shadow-sm"></div>
@@ -249,22 +230,33 @@
                 </select>
             </div>
             <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">03. Job Category</label>
+                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">03. Experience</label>
+                <select id="exp" required class="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-blue-600 outline-none transition-all">
+                    <option value="" disabled selected>職歴を選択</option>
+                    <option value="0.85">1年未満（第二新卒）</option>
+                    <option value="1.0">1〜3年（ジュニア層）</option>
+                    <option value="1.15">3〜5年（ミドル層）</option>
+                    <option value="1.25">5〜10年（シニア層）</option>
+                    <option value="1.35">10年以上（エキスパート層）</option>
+                </select>
+            </div>
+            <div class="space-y-2">
+                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">04. Job Category</label>
                 <select id="job" required class="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-blue-600 outline-none transition-all">
-                    <option value="" disabled selected>職種を選択</option><option value="sales">営業・フロント職</option><option value="engineer">エンジニア・技術職</option><option value="creative">企画・マーケ・創造職</option><option value="admin">事務・管理部門</option><option value="other">その他</option>
+                    <option value="" disabled selected>職種を選択</option><option value="sales">営業・コンサル</option><option value="engineer">エンジニア・技術職</option><option value="creative">企画・マーケ・クリエイティブ</option><option value="admin">事務・管理部門</option><option value="other">その他</option>
                 </select>
             </div>
             <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">04. Salary</label>
+                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">05. Current Salary</label>
                 <select id="salary" required class="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-blue-600 outline-none transition-all">
-                    <option value="" disabled selected>現在の年収を選択</option><option value="300">〜350万円</option><option value="450">350〜550万円</option><option value="650">550〜750万円</option><option value="850">750〜1000万円</option><option value="1200">1000万円以上</option>
+                    <option value="" disabled selected>現在の年収を選択</option><option value="320">〜350万円</option><option value="450">350〜550万円</option><option value="650">550〜750万円</option><option value="850">750〜1000万円</option><option value="1200">1000万円以上</option>
                 </select>
             </div>
             <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">05. Management</label>
+                <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">06. Management</label>
                 <div class="grid grid-cols-2 gap-4">
-                    <label class="cursor-pointer"><input type="radio" name="mgmt" value="0" class="hidden peer" required><div class="p-4 text-center font-bold border-2 border-slate-100 rounded-2xl peer-checked:border-blue-600 peer-checked:bg-blue-50 peer-checked:text-blue-600 transition-all">なし</div></label>
-                    <label class="cursor-pointer"><input type="radio" name="mgmt" value="1" class="hidden peer"><div class="p-4 text-center font-bold border-2 border-slate-100 rounded-2xl peer-checked:border-blue-600 peer-checked:bg-blue-50 peer-checked:text-blue-600 transition-all">あり</div></label>
+                    <label class="cursor-pointer"><input type="radio" name="mgmt" value="0" class="hidden peer" required><div class="p-4 text-center font-bold border-2 border-slate-100 rounded-2xl peer-checked:border-blue-600 peer-checked:bg-blue-50 peer-checked:text-blue-600 transition-all">非管理職</div></label>
+                    <label class="cursor-pointer"><input type="radio" name="mgmt" value="1" class="hidden peer"><div class="p-4 text-center font-bold border-2 border-slate-100 rounded-2xl peer-checked:border-blue-600 peer-checked:bg-blue-50 peer-checked:text-blue-600 transition-all">管理職</div></label>
                 </div>
             </div>
             <button type="submit" class="w-full bg-slate-900 text-white font-black py-5 rounded-[2.5rem] text-xl mt-4 shadow-xl active:scale-95 transition-all">診断レポートを表示</button>
@@ -273,13 +265,13 @@
 
     <section id="screen-loading" class="hidden-section flex-grow flex flex-col items-center justify-center p-8 space-y-6">
         <div class="relative w-24 h-24"><div class="absolute inset-0 border-8 border-slate-100 rounded-full"></div><div class="absolute inset-0 border-8 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>
-        <div class="text-center"><h2 class="text-xl font-black italic">Matching Market Data...</h2><p class="text-slate-400 text-[10px] font-black uppercase tracking-widest pt-2">Database Index v5.0.2 Syncing</p></div>
+        <div class="text-center"><h2 class="text-xl font-black italic">Analyzing Market Data...</h2><p class="text-slate-400 text-[10px] font-black uppercase tracking-widest pt-2">Database Index v6.1.2 Syncing</p></div>
     </section>
 
     <section id="screen-result" class="hidden-section flex-grow pb-24 overflow-y-auto bg-slate-50">
         <div class="bg-slate-900 text-white p-10 pt-16 rounded-b-[4.5rem] text-center space-y-4 shadow-2xl relative">
             <div id="res-badge" class="inline-block px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest bg-white/10 backdrop-blur-md"></div>
-            <h2 class="text-xs font-bold opacity-50 uppercase tracking-widest pt-4">Proper Market Value</h2>
+            <h2 class="text-xs font-bold opacity-50 uppercase tracking-widest pt-4">Estimated Market Salary</h2>
             <div class="flex items-baseline justify-center">
                 <span id="res-val" class="text-7xl font-black">---</span>
                 <span class="text-2xl font-bold ml-2">万円</span>
@@ -295,25 +287,21 @@
                 <div class="relative bg-white p-8 rounded-[3rem] border border-green-100 shadow-2xl space-y-6">
                     <div class="flex items-center space-x-4"><div class="w-14 h-14 line-green rounded-[1.25rem] flex items-center justify-center shadow-lg shadow-green-500/30"><span class="text-white text-3xl font-black">L</span></div><div><h3 class="text-lg font-black text-slate-800 leading-tight">適正年収への転職を<br>個別サポート</h3><p class="text-[10px] font-bold text-green-600 uppercase tracking-widest pt-1">Direct Consulting</p></div></div>
                     <p class="text-sm text-slate-500 leading-relaxed font-medium">診断結果を元に、<strong>あなただけの「年収最大化戦略」</strong>を公式LINEでアドバイス。専門エージェントによる非公開求人の提案や、キャリア相談を無料で実施しています。</p>
-                    <a href="https://lin.ee/OCtRagy" target="_blank" class="block w-full line-green text-white text-center font-black py-5 rounded-[2rem] shadow-xl shadow-green-500/25 active:scale-95 transition-all pulse-btn">公式LINEで無料相談を開始</a>
+                    <a href="https://lin.ee/OCtRagy" target="_blank" class="block w-full line-green text-white text-center font-black py-5 rounded-[2rem] shadow-xl shadow-green-500/25 active:scale-95 transition-all pulse-btn text-center">公式LINEで無料相談を開始</a>
                 </div>
             </div>
             <div class="space-y-10">
                 <div class="space-y-4">
                     <h3 class="text-lg font-black flex items-center px-2"><span class="w-1.5 h-6 bg-blue-600 rounded-full mr-3"></span>市場評価の比較</h3>
-                    <div class="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100">
-                        <div class="chart-container"><canvas id="chartGap"></canvas></div>
-                    </div>
+                    <div class="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100"><div class="chart-container"><canvas id="chartGap"></canvas></div></div>
                 </div>
                 <div class="space-y-4">
                     <h3 class="text-lg font-black flex items-center px-2"><span class="w-1.5 h-6 bg-orange-500 rounded-full mr-3"></span>キャリア・バランス評価</h3>
-                    <div class="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100">
-                        <div class="chart-container"><canvas id="chartRadar"></canvas></div>
-                    </div>
+                    <div class="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100"><div class="chart-container"><canvas id="chartRadar"></canvas></div></div>
                 </div>
             </div>
             <div class="pt-10 flex flex-col space-y-4">
-                <button onclick="share()" class="w-full bg-slate-900 text-white font-black py-5 rounded-[2.5rem] flex items-center justify-center space-x-3 shadow-xl active:scale-95 transition-all text-sm text-center">結果をSNSでシェアする</button>
+                <button onclick="share()" class="w-full bg-slate-900 text-white font-black py-5 rounded-[2.5rem] flex items-center justify-center space-x-3 shadow-xl active:scale-95 transition-all text-sm text-center">診断結果をSNSでシェア</button>
                 <button onclick="location.reload()" class="w-full bg-white text-slate-400 font-bold py-4 rounded-[2.5rem] border border-slate-200 hover:bg-slate-50 transition-all text-xs text-center">トップに戻る</button>
             </div>
         </div>
